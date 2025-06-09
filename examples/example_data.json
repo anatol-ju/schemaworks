@@ -1,0 +1,24 @@
+{
+  "email": "user@example.com",
+  "hostname": "example.com",
+  "ipv4": "192.168.1.1",
+  "ipv6": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+  "uri": "https://example.com/resource/123",
+  "uriReference": "/relative/path?query=1",
+  "uriTemplate": "https://example.com/users/{userId}",
+  "date": "2025-06-09",
+  "time": "14:46:30",
+  "dateTime": "2025-06-09T14:45:30Z",
+  "regex": "^[a-z0-9]+$",
+  "uuid": "550e8400-e29b-41d4-a716-446655440000",
+  "jsonPointer": "/foo/bar",
+  "relativeJsonPointer": "1/foo",
+
+  "smallInteger": 123456,
+  "largeInteger": 9223372036854775807,
+  "floatNumber": 123.45,
+  "doubleNumber": 1234567890.1234567,
+
+  "binaryData": "U29tZUJhc2U2NEVuY29kZWREYXRh",
+  "password": "P@ssw0rd!"
+}

@@ -1,0 +1,55 @@
+[project]
+name = "schemaworks"
+version = "1.0.0"
+description = "A schema conversion toolkit for JSON, Spark, and SQL formats."
+authors = [
+    {name = "Anatol Jurenkow", email = "azurius@t-online.de"}
+]
+license = {text = "GNU GPLv3"}
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3 (>=1.38.32,<2.0.0)",
+    "pyspark"
+]
+keywords = ["schema", "conversion", "spark", "json", "sql", "data-engineering"]
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+[project.urls]
+homepage = "https://github.com/anatol-ju/schemaworks"
+repository = "https://github.com/anatol-ju/schemaworks"
+
+[project.optional-dependencies]
+dev = [
+    "moto (>=5.1.1,<6.0.0)",
+    "pytest (>=8.3.5,<9.0.0)",
+    "pytest-cov (>=6.0.0,<7.0.0)",
+    "pytest-mock (>=3.14.0,<4.0.0)",
+    "ruff (>=0.9.9,<1.0.0)"
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov --cov-report term-missing"
+
+[tool.coverage.run]
+omit = [
+    "tests/*",
+    "*__init__.py",
+    "ds_api/dynamodao.py",
+    "ds_api/services.py",
+]
+
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^4.2.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
