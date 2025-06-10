@@ -85,7 +85,7 @@ schema = {
     }
 }
 
-converter = JsonSchemaConverter(json_schema=schema)
+converter = JsonSchemaConverter(schema=schema)
 
 # Convert to Spark schema
 spark_schema = converter.to_spark_schema()
