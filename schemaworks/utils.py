@@ -1,4 +1,5 @@
 import json
+import logging
 from decimal import Decimal
 from typing import Any
 
@@ -12,6 +13,8 @@ from pyspark.sql.types import (
     StringType,
     TimestampNTZType,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 ATHENA_TYPE_MAP = {
     "string": "string",
@@ -64,7 +67,6 @@ class DecimalEncoder(json.JSONEncoder):
             return json.JSONEncoder.default(self, obj)
 
 
-
 def infer_dtype(value: Any) -> str:
     """
     Infers the JSON schema type from a Python value.
@@ -93,6 +95,7 @@ def infer_dtype(value: Any) -> str:
     elif value is None:
         return "null"
     else:
+        LOGGER.error(f"Unsupported data type: {type(value)}")
         raise TypeError(f"Unsupported data type: {type(value)}")
 
 
@@ -119,7 +122,7 @@ def select_general_dtype(current: str, previous: str) -> str:
         return current
 
 
-def generate_schema(data: Any, previous_schema: dict[str, Any], add_required: bool = False) -> Any:
+def infer_json_schema(data: Any, previous_schema: dict[str, Any] = {}, add_required: bool = False) -> Any:
     """
     Recursively generates a JSON schema for the given data structure.
 
@@ -131,7 +134,7 @@ def generate_schema(data: Any, previous_schema: dict[str, Any], add_required: bo
     ```python
     schema = {}
     for ind in range(len(data_list)):
-        schema = generate_schema(data_list[ind], schema, False)
+        schema = infer_json_schema(data_list[ind], schema, False)
     ```
 
     Args:
@@ -153,7 +156,7 @@ def generate_schema(data: Any, previous_schema: dict[str, Any], add_required: bo
                 sub_schema = previous_schema["properties"][key]
             else:
                 sub_schema = {}
-            properties[key] = generate_schema(value, sub_schema, add_required)
+            properties[key] = infer_json_schema(value, sub_schema, add_required)
             required.append(key)
         result = {
             "type": "object",
@@ -169,7 +172,7 @@ def generate_schema(data: Any, previous_schema: dict[str, Any], add_required: bo
             for item in data:
                 dtype = infer_dtype(item)
                 if dtype == "object":
-                    dtypes.append(generate_schema(item, previous_schema.get("items", {}), add_required))
+                    dtypes.append(infer_json_schema(item, previous_schema.get("items", {}), add_required))
                 else:
                     dtypes.append(dtype)
             result_set: set[Any] = set([json.dumps(t) for t in dtypes])
@@ -193,23 +196,23 @@ def generate_schema(data: Any, previous_schema: dict[str, Any], add_required: bo
         return {"type": data_type}
 
 
-def create_json_schema_from_data(data: list[dict[str, str]], schema: dict[str, str], add_required: bool = False) -> dict[str, Any]:
+def infer_json_schema_from_dataset(data: list[dict[str, str]], schema: dict[str, str] = {}, add_required: bool = False) -> dict[str, Any]:
     """
     Generates a JSON schema from an array of dictionaries.
 
     Args:
         data_array (list): A list of dictionaries containing nested data structures.
-        schema (dict[str, str]): A schema dictaionary to use, can be empty if unknown.
+        schema (dict[str, str]): A schema dictaionary to use, defaults to an empty dictionary.
         add_required (bool, optional): If set to true a `required` array is included
             in the schema for each `object` field. Defaults to False.
     Returns:
         dict: The generated and refined JSON schema.
     """
     if not data or not isinstance(data, list):
+        LOGGER.error("Input must be a non-empty list of dictionaries.")
         raise ValueError("Input must be a non-empty list of dictionaries.")
 
-    schema = {}
     for ind in range(len(data)):
-        schema = generate_schema(data[ind], schema, add_required)
+        schema = infer_json_schema(data[ind], schema, add_required)
 
     return schema

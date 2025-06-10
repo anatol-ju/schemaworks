@@ -53,6 +53,7 @@ def example_json_schema() -> Dict[str, Any]:
         }
     }
 
+
 @pytest.fixture
 def example_full_json_schema() -> Dict[str, Any]:
     """
@@ -141,20 +142,20 @@ def example_mapping() -> Dict[str, Any]:
     }
 
 
-def test_read_json(json_schema_converter: Any, example_json_schema: Any) -> None:
+def test_load_schema_from_file(json_schema_converter: Any, example_json_schema: Any) -> None:
     """Read JSON schema from file correctly."""
     with NamedTemporaryFile(delete=True, suffix=".json") as tmp:
         with open(tmp.name, "w", encoding="utf-8") as f:
             json.dump(example_json_schema, f)
 
-        result = json_schema_converter.read_json(tmp.name)
+        result = json_schema_converter.load_schema_from_file(tmp.name)
         assert result == example_json_schema
         assert json_schema_converter.json_schema == example_json_schema
 
 
 @mock_aws
-def test_read_from_s3(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Read JSON schema from S3 without session correctly."""
+def test_load_schema_from_s3(json_schema_converter: Any, example_json_schema: Any) -> None:
+    """Read JSON schema from S3 without client or resource correctly."""
     s3 = boto3.client("s3", region_name="eu-west-1")
     bucket_name = "test-bucket"
     key = "schema.json"
@@ -166,13 +167,14 @@ def test_read_from_s3(json_schema_converter: Any, example_json_schema: Any) -> N
         example_json_schema).encode("utf-8"))
 
     s3_uri = f"s3://{bucket_name}/{key}"
-    result = json_schema_converter.read_from_s3(s3_uri)
+    result = json_schema_converter.load_schema_from_s3(s3_uri)
 
     assert result == example_json_schema
     assert json_schema_converter.json_schema == example_json_schema
 
+
 @mock_aws
-def test_read_from_s3_with_session(json_schema_converter, example_json_schema):
+def test_load_schema_from_s3_with_resource(json_schema_converter, example_json_schema):
     """Read JSON schema from S3 using provided session."""
     session = boto3.Session(region_name="eu-west-1")
     s3_resource = session.resource("s3", region_name="eu-west-1")
@@ -189,17 +191,47 @@ def test_read_from_s3_with_session(json_schema_converter, example_json_schema):
     )
 
     s3_uri = f"s3://{bucket_name}/{key}"
-    result = json_schema_converter.read_from_s3(
+    result = json_schema_converter.load_schema_from_s3(
         s3_uri,
         region="eu-west-1",
-        session=session
+        client_or_resource=s3_resource
     )
 
     assert result == example_json_schema
     assert json_schema_converter.json_schema == example_json_schema
 
+
 @mock_aws
-def test_read_from_s3_non_dict_json_raises(json_schema_converter):
+def test_load_schema_from_s3_with_client(json_schema_converter, example_json_schema):
+    """Read JSON schema from S3 using provided client."""
+    s3 = boto3.client("s3", region_name="eu-west-1")
+    bucket_name = "client-bucket"
+    key = "schema.json"
+
+    # create bucket and upload object using the explicit client
+    s3.create_bucket(
+        Bucket=bucket_name,
+        CreateBucketConfiguration={"LocationConstraint": "eu-west-1"}
+    )
+    s3.put_object(
+        Bucket=bucket_name,
+        Key=key,
+        Body=json.dumps(example_json_schema).encode("utf-8")
+    )
+
+    s3_uri = f"s3://{bucket_name}/{key}"
+    result = json_schema_converter.load_schema_from_s3(
+        s3_uri,
+        region="eu-west-1",
+        client_or_resource=s3
+    )
+
+    assert result == example_json_schema
+    assert json_schema_converter.json_schema == example_json_schema
+
+
+@mock_aws
+def test_load_schema_from_s3_non_dict_json_raises(json_schema_converter):
     """Raise AttributeError when S3 returns non-dict JSON."""
     s3 = boto3.client("s3", region_name="eu-west-1")
     bucket_name = "test-bucket"
@@ -218,38 +250,41 @@ def test_read_from_s3_non_dict_json_raises(json_schema_converter):
 
     s3_uri = f"s3://{bucket_name}/{key}"
     with pytest.raises(AttributeError) as excinfo:
-        json_schema_converter.read_from_s3(s3_uri)
+        json_schema_converter.load_schema_from_s3(s3_uri)
         assert "The loaded JSON is not a dictionary." in str(excinfo.value)
 
+
+def test_load_schema_from_s3_invalid_client_or_resource(json_schema_converter):
+    """Raise ValueError when client_or_resource is not a boto3 client or resource."""
+    with pytest.raises(TypeError) as excinfo:
+        json_schema_converter.load_schema_from_s3("s3://bucket/key", client_or_resource="invalid")
+        assert "client_or_resource must be a boto3 client or resource." in str(excinfo.value)
+
+
 @mock_aws
-def test_read_from_s3_invalid_schema_path(json_schema_converter):
+def test_load_schema_from_s3_invalid_schema_path(json_schema_converter):
     """Raise ValueError for invalid S3 URI."""
     with pytest.raises(ValueError) as excinfo:
-        json_schema_converter.read_from_s3("any-bucket/any-key")
+        json_schema_converter.load_schema_from_s3("any-bucket/any-key")
         assert "Invalid S3 URI: any-bucket/any-key" in str(excinfo.value)
 
-def test_read_from_s3_client_error_prints_and_raises(json_schema_converter, capsys):
-    """Print error and re-raise ClientError when S3 get fails."""
-    class DummySession:
-        def resource(self, service, region_name=None):
-            class DummyResource:
-                def Object(self, bucket_name, key):
-                    class DummyObj:
-                        def get(self_inner):
-                            error_response = {
-                                'Error': {'Code': 'NoSuchKey', 'Message': 'Key not found'}
-                            }
-                            raise ClientError(error_response, 'GetObject')
-                    return DummyObj()
-            return DummyResource()
 
-    session = DummySession()
+@mock_aws
+def test_load_schema_from_s3_client_error_prints_and_raises(json_schema_converter, capsys):
+    """print error and re-raise clienterror when s3 get_object fails for client."""
+    s3_client = boto3.client("s3", region_name="eu-west-1")
+    # monkeypatch get_object to raise ClientError
+    error_response = {'Error': {'Code': 'NoSuchKey', 'Message': 'Key not found'}}
+    def fake_get_object(**kwargs):
+        raise ClientError(error_response, 'GetObject')
+    s3_client.get_object = fake_get_object
+
     s3_uri = "s3://bucket/key"
     with pytest.raises(ClientError):
-        json_schema_converter.read_from_s3(s3_uri, session=session)
-    captured = capsys.readouterr()
-    # verify the error message is printed
-    assert "An error ocurred when reading schema from S3." in captured.out
+        json_schema_converter.load_schema_from_s3(s3_uri, client_or_resource=s3_client)
+        captured = capsys.readouterr()
+        assert "An error ocurred when reading schema from S3." in captured.out
+
 
 def test_apply_mapping(json_schema_converter: Any, example_mapping: Dict[str, Any]) -> None:
     """Apply mapping correctly to converter mapping attribute."""
@@ -271,6 +306,7 @@ def test_to_spark_schema(json_schema_converter: Any, example_json_schema: Any) -
 
     assert spark_schema == expected_schema
 
+
 def test_to_spark_schema_no_json_schema_raises(json_schema_converter):
     """Raise AttributeError when no JSON schema is set for Spark conversion."""
     converter = json_schema_converter
@@ -279,12 +315,14 @@ def test_to_spark_schema_no_json_schema_raises(json_schema_converter):
         converter.to_spark_schema()
     assert "No JSON schema available" in str(excinfo.value)
 
+
 def test_to_sql_string_no_json_schema_raises(json_schema_converter):
     """Raise AttributeError when no JSON schema is set for SQL string."""
     converter = json_schema_converter
     with pytest.raises(AttributeError) as excinfo:
         converter.to_sql_string()
     assert "No JSON schema available" in str(excinfo.value)
+
 
 def test_to_spark_string(json_schema_converter: Any, example_json_schema: Any) -> None:
     """Convert JSON schema to Spark string correctly."""
@@ -347,6 +385,7 @@ def test_to_dtypes_no_json_schema_raises(json_schema_converter):
         converter.to_dtypes()
     assert "No JSON schema available" in str(excinfo.value)
 
+
 def test_to_dtypes_non_string_val_raises(json_schema_converter, monkeypatch):
     """Raise AttributeError if _to_sql_string returns non-string in dtypes."""
     json_schema_converter.json_schema = {"properties": {"x": {"type": "string"}}}
@@ -354,6 +393,7 @@ def test_to_dtypes_non_string_val_raises(json_schema_converter, monkeypatch):
     with pytest.raises(AttributeError) as excinfo:
         json_schema_converter.to_dtypes()
     assert "'_to_sql_string' returned a non-string value." in str(excinfo.value)
+
 
 def test_to_dtypes_lowercase_keys(json_schema_converter):
     """Lowercase keys in dtypes output when to_lower is True."""
@@ -383,6 +423,7 @@ def test_decimal_encoder() -> None:
     assert decoded["integer_value"] == 12
     assert decoded["float_value"] == 12.34
 
+
 def test_flatten_schema_basic() -> None:
     """Flatten schema with nested properties using default separator."""
     schema = {
@@ -406,6 +447,7 @@ def test_flatten_schema_basic() -> None:
     }
     assert JsonSchemaConverter._flatten_schema(schema) == expected_output
 
+
 def test_flatten_schema_with_different_separator() -> None:
     """Flatten schema using a different separator."""
     schema = {
@@ -427,6 +469,7 @@ def test_flatten_schema_with_different_separator() -> None:
     }
     assert JsonSchemaConverter._flatten_schema(schema, sep="/") == expected_output
 
+
 def test_flatten_schema_with_no_properties() -> None:
     """Return empty dict when flattening schema with no properties."""
     schema = {
@@ -435,6 +478,7 @@ def test_flatten_schema_with_no_properties() -> None:
     }
     expected_output: dict[str, Any] = {}
     assert JsonSchemaConverter._flatten_schema(schema) == expected_output
+
 
 def test_to_flat(json_schema_converter: JsonSchemaConverter) -> None:
     """Convert JSON schema to flat dictionary using default separator."""
@@ -460,6 +504,7 @@ def test_to_flat(json_schema_converter: JsonSchemaConverter) -> None:
     }
     assert json_schema_converter.to_flat() == expected_output
 
+
 def test_to_flat_with_different_separator(json_schema_converter: JsonSchemaConverter) -> None:
     """Convert JSON schema to flat dictionary with custom separator."""
     schema = {
@@ -484,19 +529,20 @@ def test_to_flat_with_different_separator(json_schema_converter: JsonSchemaConve
     }
     assert json_schema_converter.to_flat(sep="/") == expected_output
 
+
 def test_to_spark_string_initializes_schema(json_schema_converter: Any, example_json_schema: Any) -> None:
     """Initialize Spark schema and return Spark string when Spark schema is None."""
-    # ensure spark_schema is initially None
+    # Ensure spark_schema is initially None
     assert json_schema_converter.spark_schema is None
 
-    # set json_schema and call to_spark_string without prior to_spark_schema
+    # Set json_schema and call to_spark_string without prior to_spark_schema
     json_schema_converter.json_schema = example_json_schema
     spark_string = json_schema_converter.to_spark_string()
 
-    # spark_schema should now be set
+    # Spark_schema should now be set
     assert json_schema_converter.spark_schema is not None
 
-    # verify the returned string is correct
+    # Verify the returned string is correct
     expected_string = (
         'StructType([\n'
         '    StructField("uid", StringType(), nullable=True),\n'
@@ -507,7 +553,7 @@ def test_to_spark_string_initializes_schema(json_schema_converter: Any, example_
     )
     assert spark_string == expected_string
 
-# Additional tests for array, decimal, map, unknown type, and string representations
+
 def test_to_spark_schema_object_type(json_schema_converter):
     """Convert JSON schema with object root type to Spark StructType."""
     json_schema_converter.json_schema = {
@@ -524,7 +570,7 @@ def test_to_spark_schema_object_type(json_schema_converter):
     ])
     assert spark_schema == expected
 
- # Parameterized test for array, decimal, and map types in to_spark_schema
+
 @pytest.mark.parametrize(
     "schema, expected_class, check",
     [
@@ -552,6 +598,7 @@ def test_to_spark_schema_varieties(json_schema_converter, schema, expected_class
     assert isinstance(result, expected_class)
     assert check(result)
 
+
 def test_to_spark_schema_with_mapping_root(json_schema_converter):
     """Apply mapping and convert root properties to Spark schema."""
     json_schema_converter.json_schema = {
@@ -572,6 +619,7 @@ def test_to_spark_schema_with_mapping_root(json_schema_converter):
     ])
     assert spark_schema == expected
 
+
 def test_to_spark_schema_unknown_type_raises(json_schema_converter):
     """Raise AttributeError for unknown data type in Spark schema."""
     json_schema_converter.json_schema = {"type": "unknown"}
@@ -579,7 +627,7 @@ def test_to_spark_schema_unknown_type_raises(json_schema_converter):
         json_schema_converter.to_spark_schema()
     assert "Unknown data type" in str(excinfo.value)
 
- # Parameterized test for spark string output for array, map, and decimal root types
+
 @pytest.mark.parametrize(
     "schema, expected",
     [
@@ -604,12 +652,14 @@ def test_to_spark_string_varieties(json_schema_converter, schema, expected):
     output = json_schema_converter.to_spark_string()
     assert output == expected
 
+
 def test_to_spark_string_unknown_datatype_raises(json_schema_converter):
     """Raise AttributeError for unknown datatype in spark string."""
     with pytest.raises(AttributeError) as excinfo:
         # BinaryType is not handled explicitly in _to_spark_string
         json_schema_converter._to_spark_string(BinaryType())
     assert "Unknown data type" in str(excinfo.value)
+
 
 def test_to_sql_string_null_type_raises(json_schema_converter):
     """Raise ValueError for null type in SQL string."""
@@ -634,6 +684,7 @@ def test_to_sql_string_nested_object(json_schema_converter):
     sql_string = json_schema_converter.to_sql_string(to_lower=True)
     assert sql_string == "outer struct<inner: int>"
 
+
 def test_to_sql_string_with_mapping(json_schema_converter):
     """Apply mapping and convert to SQL string correctly."""
     json_schema_converter.json_schema = {"properties": {"cnt": {"type": "integer"}}}
@@ -654,12 +705,11 @@ def test_to_sql_string_non_string_output_raises(json_schema_converter, monkeypat
     json_schema_converter.json_schema = {"properties": {"x": {"type": "string"}}}
     # monkeypatch _to_sql_string to return a non-string type
     monkeypatch.setattr(json_schema_converter, '_to_sql_string', lambda data, to_lower=False: 123)
-    import pytest
     with pytest.raises(ValueError) as excinfo:
         json_schema_converter.to_sql_string()
     assert "The output of 'to_sql_string' is not a string." in str(excinfo.value)
 
- # Parameterized test for SQL string output for array and map root types
+
 @pytest.mark.parametrize(
     "schema, expected",
     [

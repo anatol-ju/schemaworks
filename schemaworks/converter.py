@@ -1,9 +1,12 @@
 import json
+import logging
 from typing import Any
 from urllib.parse import urlparse
 
 import boto3
 import botocore
+from boto3.resources.base import ServiceResource
+from botocore.client import BaseClient
 from pyspark.sql.types import (
     ArrayType,
     BooleanType,
@@ -23,6 +26,7 @@ from pyspark.sql.types import (
 
 from schemaworks.utils import ATHENA_TYPE_MAP, SPARK_TYPE_MAP
 
+LOGGER = logging.getLogger(__name__)
 
 class JsonSchemaConverter():
     """
@@ -37,14 +41,37 @@ class JsonSchemaConverter():
 
     These are converted appropriate for the platform (Spark or AWS Athena).
     """
-    def __init__(self) -> None:
-        self.json_schema: dict[str, Any] = {}
+    def __init__(self, schema: dict[str, Any] = {}) -> None:
+        """
+        Initializes the converter with an optional JSON schema.
+
+        Args:
+            schema (dict[str, Any]): A JSON schema in dictionary format.
+                If not provided, an empty schema is initialized.
+        """
+        self.json_schema: dict[str, Any] = schema
         self.spark_schema: DataType|None = None
         self.spark_string: str = ""
         self.mapping: dict[str, dict[str, Any]] = {}
         self.sql_schema_string: str = ""
 
     def _to_spark_schema(self, data: dict[str, Any], to_lower: bool) -> DataType:
+        """
+        Helper function to parse the dictionary recursively and therefore
+        resolve all nested structures.
+
+        Args:
+            data (dict[str, Any]): Either the initial dataset, the sub-dataset
+                used for recursion, or a string to be resolved to a data type.
+            to_lower (bool): Convert all field names to lower case.
+
+        Raises:
+            AttributeError: Raised if any of the fields have data type `null`.
+            AttributeError: Raised if the data type can not be resolved.
+
+        Returns:
+            DataType: The sub-dataset used for recursion, or a PySpark DataType object.
+        """
         if "type" not in data or not isinstance(data["type"], str):
             if "properties" in data:
                 return self._to_spark_schema(data["properties"], to_lower)
@@ -71,9 +98,23 @@ class JsonSchemaConverter():
             if data_type:
                 return data_type
             else:
+                LOGGER.error("Unknown data type %s.", data["type"])
                 raise AttributeError(f"Unknown data type {data['type']}.")
 
     def _to_spark_string(self, field: DataType, depth: int = 1) -> str:
+        """
+        Helper function to convert a PySpark DataType object to a string representation.
+
+        Args:
+            field (DataType): The PySpark DataType object to convert.
+            depth (int): The current depth in the schema, used for formatting.
+
+        Raises:
+            AttributeError: Raised if the provided field is not a recognized data type.
+
+        Returns:
+            str: A string representation of the PySpark DataType object.
+        """
         if isinstance(field, (NullType, StringType, BooleanType, IntegerType, FloatType, DateType, TimestampNTZType, LongType)):
             return str(field)
         elif isinstance(field, ArrayType):
@@ -105,6 +146,7 @@ class JsonSchemaConverter():
             r += f", nullable={field.nullable}),"
             return r
         else:
+            LOGGER.error("Unknown data type %s.", field)
             raise AttributeError(f"Unknown data type {field}.")
 
     def _to_sql_string(self, data: dict[str, Any], to_lower: bool = False) -> str|dict[str, Any]:
@@ -137,6 +179,7 @@ class JsonSchemaConverter():
                         arr.append(f"{key.lower() if to_lower else key} {self._to_sql_string(data[key])}")
                 return f"struct<{', '.join(arr)}>"
         elif data["type"] == "null":
+            LOGGER.error("Data type 'null' is not supported by Iceberg schema.")
             raise ValueError(
                 f"Data type '{data['type']}' is not supported by Iceberg schema."
             )
@@ -156,9 +199,10 @@ class JsonSchemaConverter():
             if data_type:
                 return data_type
             else:
+                LOGGER.error("Unknown data type '%s'.", data["type"])
                 raise AttributeError(f"Unknown data type '{data['type']}'.")
 
-    def read_json(self, filepath: str) -> dict[str, Any]:
+    def load_schema_from_file(self, filepath: str) -> dict[str, Any]:
         """
         Read a local file formatted as JSON schema and returns the Python object.
 
@@ -169,18 +213,20 @@ class JsonSchemaConverter():
             self.json_schema = json.load(reader)
         return self.json_schema
 
-    def read_from_s3(self,
-                     s3_uri: str,
-                     region: str = "eu-west-1",
-                     session: boto3.Session|None = None) -> dict[str, Any]:
+    def load_schema_from_s3(
+        self,
+        s3_uri: str,
+        region: str = "eu-west-1",
+        client_or_resource: Any | None = None,
+    ) -> dict[str, Any]:
         """
         Reads a JSON file from S3 and provides it's contents in form of a dictionary.
 
         Args:
             s3_uri (str): The path to the JSON file, i.e. `s3://bucket/key.json`.
             region (str): The AWS region name. Defaults to "eu-west-1".
-            session (boto3.Session | None): An optional boto3 session to use.
-                Using this can accellerate access when reading frequently.
+            client_or_resource (Any | None): A boto3 S3 resource or client.
+                If not provided, a new resource is created using the specified region.
 
         Raises:
             ValueError: Raised when the provided path could not be resolved.
@@ -188,29 +234,48 @@ class JsonSchemaConverter():
         Returns:
             dict[str, Any]: A dictionary representation of the JSON file.
         """
-        if session:
-            s3_resource = session.resource("s3", region_name=region)
+        s3_resource = None
+        s3_client = None
+        if not client_or_resource:
+            s3_resource = boto3.resource("s3", region_name=region)
+        elif isinstance(client_or_resource, ServiceResource):
+            s3_resource = client_or_resource
+        elif isinstance(client_or_resource, BaseClient):
+            s3_client = client_or_resource
         else:
-            s3_resource = boto3.Session().resource("s3", region_name=region)
+            LOGGER.error("Invalid client_or_resource parameter type: %s", type(client_or_resource))
+            raise TypeError("client_or_resource parameter value must be a boto3 S3 resource or client.")
 
         schema_path = urlparse(s3_uri, allow_fragments=False)
-        # ensure urlparse returned a valid result with netloc and path
-        if not hasattr(schema_path, 'netloc') or not hasattr(schema_path, 'path') \
-           or not schema_path.netloc or not schema_path.path:
+
+        # Ensure urlparse returned a valid result with netloc and path
+        if not hasattr(schema_path, "netloc") or not hasattr(schema_path, "path") \
+            or not schema_path.netloc or not schema_path.path:
+            LOGGER.error("Invalid S3 URI provided: %s", s3_uri)
             raise ValueError(f"Invalid S3 URI: {s3_uri}")
+
         try:
-            obj = s3_resource.Object(
-                schema_path.netloc, schema_path.path.split("/", 1)[-1]
-            )
-            content = obj.get()["Body"].read().decode("utf-8")
+            if s3_resource:
+                obj = s3_resource.Object(
+                    schema_path.netloc, schema_path.path.split("/", 1)[-1]
+                )
+                content = obj.get()["Body"].read().decode("utf-8")
+            elif s3_client:
+                response = s3_client.get_object(
+                    Bucket=schema_path.netloc, Key=schema_path.path.split("/", 1)[-1]
+                )
+                content = response["Body"].read().decode("utf-8")
+
             result = json.loads(content)
+
             if isinstance(result, dict):
                 self.json_schema = result
                 return result
             else:
+                LOGGER.error("The loaded JSON is not a dictionary.")
                 raise AttributeError("The loaded JSON is not a dictionary.")
         except botocore.exceptions.ClientError as err:
-            print("An error ocurred when reading schema from S3.", err)
+            LOGGER.error("An error ocurred when reading schema from S3.", exc_info=err)
             raise
 
     def apply_mapping(self, conversion_map: dict[str, dict[str, Any]] = {}) -> None:
@@ -295,6 +360,7 @@ class JsonSchemaConverter():
             DataType: A PySpark DataType object as the schema.
         """
         if not self.json_schema:
+            LOGGER.error("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
             raise AttributeError("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
         self.spark_schema = self._to_spark_schema(self.json_schema, to_lower)
         return self.spark_schema
@@ -338,12 +404,14 @@ class JsonSchemaConverter():
             str: The string representation of the schema as used by SQL DDL.
         """
         if not self.json_schema:
+            LOGGER.error("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
             raise AttributeError("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
 
         schema_str = self._to_sql_string(self.json_schema, to_lower)
         if isinstance(schema_str, str):
             self.sql_schema_string = schema_str
         else:
+            LOGGER.error("'to_sql_string' returned a non-string value: %s", type(schema_str))
             raise ValueError("The output of 'to_sql_string' is not a string.")
 
         if self.sql_schema_string.startswith("struct<") and self.sql_schema_string.endswith(">"):
@@ -386,6 +454,7 @@ class JsonSchemaConverter():
             dict[str, str]: A dictionary with column names as keys and SQL schemas as their values.
         """
         if not self.json_schema:
+            LOGGER.error("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
             raise AttributeError("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
 
         result: dict[str, str] = {}
@@ -394,6 +463,7 @@ class JsonSchemaConverter():
             if isinstance(val, str):
                 result[key.lower() if to_lower else key] = val
             else:
+                LOGGER.error("'_to_sql_string' returned a non-string value: %s", type(val))
                 raise AttributeError("'_to_sql_string' returned a non-string value.")
         return result
 

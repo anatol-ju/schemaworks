@@ -3,7 +3,6 @@
   "title": "Format Showcase Example",
   "type": "object",
   "properties": {
-    // string formats
     "email": {
       "type": "string",
       "format": "email"
@@ -60,8 +59,6 @@
       "type": "string",
       "format": "relative-json-pointer"
     },
-
-    // numeric formats (used in OpenAPI/Swagger for hints)
     "smallInteger": {
       "type": "integer",
       "format": "int32"
@@ -78,8 +75,6 @@
       "type": "number",
       "format": "double"
     },
-
-    // optional/commonly used custom formats (not in spec)
     "binaryData": {
       "type": "string",
       "format": "binary"
