@@ -1,6 +1,6 @@
 [project]
 name = "schemaworks"
-version = "1.0.0"
+version = "1.0.1"
 description = "A schema conversion toolkit for JSON, Spark, and SQL formats."
 authors = [
     {name = "Anatol Jurenkow", email = "azurius@t-online.de"}
