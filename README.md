@@ -20,6 +20,17 @@
 - Automating schema generation from sample data for prototyping
 - Simplifying developer tooling with schema introspection
 
+## 🔍 Validation Support
+
+SchemaWorks includes custom schema validation support through extended JSON Schema validators. It supports standard types like `string`, `integer`, `array`, and also recognises additional types common in data engineering workflows:
+
+- Extended support for:
+  - `float`, `bool`, `long`
+  - `date`, `datetime`, `time`
+  - `map`
+
+Validation is performed using an enhanced version of `jsonschema.Draft202012Validator` that integrates these type checks.
+
 ## 🚚 Installation
 
 You can install SchemaWorks using `pip` or `poetry`, depending on your preference.
@@ -99,13 +110,15 @@ print(sql_schema)
 ## 📖 Documentation
 
 - JSON ↔ Spark conversions
-Map JSON schema types to Spark StructTypes and back.
+  Map JSON schema types to Spark StructTypes and back.
 - Schema flattening
-Flatten nested schemas into dot notation for easier access and mapping.
+  Flatten nested schemas into dot notation for easier access and mapping.
 - Data-driven schema inference
-Automatically generate JSON schemas from raw data samples.
+  Automatically generate JSON schemas from raw data samples.
 - Decimal compatibility
-Custom JSON encoder to handle decimal.Decimal values safely.
+  Custom JSON encoder to handle decimal.Decimal values safely.
+- Schema validation
+  Validate schemas and make data conform if needed.
 
 ## 🧪 Testing
 
@@ -202,6 +215,38 @@ import json
 
 data = {"price": Decimal("19.99")}
 print(json.dumps(data, cls=DecimalEncoder))  # Output: {"price": 19.99}
+```
+
+### ✅ Validate data
+
+```python
+from schemaworks.validators import PythonTypeValidator
+
+schema = {
+    "type": "object",
+    "properties": {
+        "created_at": {"type": "datetime"},
+        "price": {"type": "float"},
+        "active": {"type": "bool"}
+    }
+}
+
+data = {
+    "created_at": "2023-01-01T00:00:00",
+    "price": 10.5,
+    "active": True
+}
+
+validator = PythonTypeValidator()
+validator.validate(data, schema)
+```
+
+### ✅ Make data conform to schema
+
+You can also use `.conform()` to enforce schema types and fill in missing values with sensible defaults:
+
+```python
+conformed_data = validator.conform(data, schema, fill_missing=True)
 ```
 
 ## 📄 License
