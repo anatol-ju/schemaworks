@@ -22,7 +22,7 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
-    TimestampNTZType,
+    TimestampNTZType
 )
 
 from schemaworks.utils import ATHENA_TYPE_MAP, SPARK_TYPE_MAP, IcebergIDAllocator
