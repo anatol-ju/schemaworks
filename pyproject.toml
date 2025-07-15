@@ -12,7 +12,8 @@ dependencies = [
     "boto3 (>=1.38.32,<2.0.0)",
     "jsonschema",
     "numpy",
-    "pyspark"
+    "pyspark",
+    "pyiceberg (>=0.9.1,<0.10.0)"
 ]
 keywords = ["schema", "conversion", "spark", "json", "sql", "data-engineering"]
 classifiers = [
