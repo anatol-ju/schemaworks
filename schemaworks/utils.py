@@ -14,6 +14,22 @@ from pyspark.sql.types import (
     TimestampNTZType,
 )
 
+from pyiceberg.types import (
+    BooleanType as IcebergBooleanType,
+    DateType as IcebergDateType,
+    FloatType as IcebergFloatType,
+    IntegerType as IcebergIntegerType,
+    LongType as IcebergLongType,
+    DoubleType as IcebergDoubleType,
+    StringType as IcebergStringType,
+    TimestampType as IcebergTimestampType,
+    DecimalType as IcebergDecimalType,
+    MapType as IcebergMapType,
+    ListType as IcebergListType,
+    StructType as IcebergStructType,
+    NestedField as IcebergNestedField
+)
+
 LOGGER = logging.getLogger(__name__)
 
 ATHENA_TYPE_MAP = {
@@ -47,6 +63,23 @@ SPARK_TYPE_MAP = {
     "timestamp": LongType()
 }
 
+ICEBERG_TYPE_MAP = {
+    "string": IcebergStringType,
+    "str": IcebergStringType,
+    "boolean": IcebergBooleanType,
+    "bool": IcebergBooleanType,
+    "number": IcebergFloatType,
+    "integer": IcebergIntegerType,
+    "int": IcebergIntegerType,
+    "long": IcebergLongType,
+    "float": IcebergFloatType,
+    "double": IcebergDoubleType,
+    "decimal": IcebergDecimalType,
+    "date": IcebergDateType,
+    "datetime": IcebergTimestampType,
+    "timestamp": IcebergTimestampType
+}
+
 
 class DecimalEncoder(json.JSONEncoder):
     """
@@ -65,6 +98,39 @@ class DecimalEncoder(json.JSONEncoder):
         else:
             # Otherwise use the default behavior
             return json.JSONEncoder.default(self, obj)
+
+
+class IcebergIDAllocator:
+    """
+    A simple ID allocator that generates unique IDs starting from a given number.
+    The IDs are generated sequentially, starting from the specified `start` value.
+
+    This class is useful for generating unique identifiers for Iceberg tables or other
+    data structures where IDs are required that are globally consistent and safe.
+
+    Usage:
+    ```python
+    from schemaworks.utils import IcebergIDAllocator
+
+    allocator = IcebergIDAllocator(start=1000)
+    next_id = allocator.next()  # Returns 1000, then 1001, etc.
+    peek_id = allocator.peek()  # Returns the next ID without incrementing it.
+    allocator.reset(2000)  # Resets the next ID to 2000.
+    ```
+    """
+    def __init__(self, start: int = 1000) -> None:
+        self._next_id = start
+
+    def next(self) -> int:
+        current = self._next_id
+        self._next_id += 1
+        return current
+
+    def peek(self) -> int:
+        return self._next_id
+
+    def reset(self, to: int) -> None:
+        self._next_id = to
 
 
 def infer_dtype(value: Any) -> str:
@@ -216,3 +282,115 @@ def infer_json_schema_from_dataset(data: list[dict[str, str]], schema: dict[str,
         schema = infer_json_schema(data[ind], schema, add_required)
 
     return schema
+
+
+def flatten_schema(schema: dict[str, Any], parent_key: str = "", sep: str = ".") -> dict[str, Any]:
+    """
+    Flattens the provided JSON schema.
+    - Removes keywords like `type` and `properties`.
+    - Handles nested fields by separating them by `.`.
+
+    Args:
+        schema (dict[str, Any]): A dictionary in JSON schema format.
+        parent_key (str, optional): Used in recursion. Defaults to "".
+        sep (str, optional): Separator to use when unnesting fields. Defaults to ".".
+
+    Returns:
+        dict[str, Any]: A flattened dictionary.
+
+    Example:
+        ```json
+        {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "title": "example-schema",
+            "properties": {
+                "uid": {"type": "string"},
+                "details": {
+                    "type": "object",
+                    "properties": {
+                        "nested1": {"type": "number"},
+                        "nested2": {"type": "string"}
+                    }
+                }
+            }
+        }
+        ```
+        resolves to
+        ```python
+        {"uid": "string", "details.nested1": "float", "details.nested2": "string"}
+        ```
+    """
+    items = {}
+    for k, v in schema.get("properties", {}).items():
+        new_key = f"{parent_key}{sep}{k}" if parent_key else k
+        if v.get("type") == "object":
+            items.update(flatten_schema(v, new_key, sep=sep))
+        else:
+            items[new_key] = v["type"]
+    return items
+
+
+def build_iceberg_struct_type(properties: dict[str, Any], allocator: "IcebergIDAllocator", required_fields: list[str] = []):
+    """
+    Helper to convert a JSON schema `properties` dict into an Iceberg StructType.
+    Uses the converter instance to ensure correct struct field parsing.
+    """
+    fields = [
+        parse_iceberg_field(field_name, field_def, allocator, required_fields)
+        for field_name, field_def in properties.items()
+    ]
+    return IcebergStructType(*fields)
+
+
+def parse_iceberg_field(
+    name: str,
+    field_definition: dict[str, Any],
+    allocator: "IcebergIDAllocator",
+    required_fields: list[str] = []
+) -> IcebergNestedField:
+    """
+    Parses a single JSON schema field into an Iceberg NestedField.
+    Args:
+        name (str): Field name.
+        field_definition (dict[str, Any]): Field definition from schema.
+        allocator (IcebergIDAllocator): ID allocator.
+        required_fields (list[str]): List of required field names.
+    Returns:
+        IcebergNestedField: The parsed Iceberg NestedField.
+    """
+    field_type = field_definition.get("type")
+    is_required = name in required_fields
+
+    # We assign a synthetic name to the list/map element solely to pass through the parse function,
+    # which expects a field name for ID generation. This name is not persisted in the schema,
+    # as Iceberg list/map elements are anonymous in the final schema definition.
+    if field_type == "object":
+        result_type = build_iceberg_struct_type(
+            field_definition.get("properties", {}),
+            allocator,
+            field_definition.get("required", required_fields)
+        )
+    elif field_type == "array":
+        result_type = IcebergListType(
+            element_id=allocator.next(),
+            element_type=parse_iceberg_field(f"{name}_element", field_definition["items"], allocator, []).field_type,
+            element_required=False
+        )
+    elif field_type == "map":
+        result_type = IcebergMapType(
+            key_id=allocator.next(),
+            key_type=parse_iceberg_field(f"{name}_key", field_definition["properties"]["key"], allocator, []).field_type,
+            value_id=allocator.next(),
+            value_type=parse_iceberg_field(f"{name}_value", field_definition["properties"]["value"], allocator, []).field_type,
+            value_required=False
+        )
+    elif field_type == "decimal":
+        precision = int(field_definition["properties"]["precision"])
+        scale = int(field_definition["properties"]["scale"])
+        result_type = IcebergDecimalType(precision, scale)
+    elif field_type in ICEBERG_TYPE_MAP:
+        result_type = ICEBERG_TYPE_MAP[field_type]()
+    else:
+        raise ValueError(f"Unsupported type '{field_type}' in field '{name}'")
+
+    return IcebergNestedField(field_id=allocator.next(), name=name, field_type=result_type, required=is_required)

@@ -2,12 +2,16 @@
 
 **SchemaWorks** is a Python library for converting between different schema definitions, such as JSON Schema, Spark DataTypes, SQL type strings, and more. It aims to simplify working with structured data across multiple data engineering and analytics platforms.
 
+## 📣 New in 1.2.0
+Added support to create Iceberg schemas to be used with PyIceberg.
+
 ## 🔧 Features
 
 - Convert JSON Schema to:
   - Apache Spark StructType
   - SQL column type strings
   - Python dtypes dictionaries
+  - Iceberg types (using PyIceberg)
 - Convert Spark schemas and dtypes to JSON Schema
 - Generate JSON Schemas from example data
 - Flatten nested schemas for easier inspection or mapping
@@ -199,6 +203,33 @@ After inferring or converting a schema, it's often necessary to express it in SQ
 
 ```python
 pprint(converter.to_sql_string())
+```
+
+### ✅ Convert to Apache Iceberg Schema
+
+You can now (as of version 1.2.0) convert a JSON Schema directly into an Iceberg-compatible schema using PyIceberg:
+
+```python
+from schemaworks.converter import JsonSchemaConverter
+
+json_schema = {
+    "type": "object",
+    "properties": {
+        "uid": {"type": "string"},
+        "details": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "number"},
+                "active": {"type": "boolean"}
+            },
+            "required": ["score"]
+        }
+    },
+    "required": ["uid"]
+}
+
+converter = JsonSchemaConverter(json_schema)
+iceberg_schema = converter.to_iceberg_schema()
 ```
 
 ### ✅ Handle decimals in JSON safely

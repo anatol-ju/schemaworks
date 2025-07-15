@@ -1,12 +1,10 @@
 import json
-from decimal import Decimal
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict
 
 import boto3
 import pytest
 from moto import mock_aws
-from schemaworks.utils import DecimalEncoder
 from pyspark.sql.types import (
     BinaryType,
     BooleanType,
@@ -143,7 +141,7 @@ def example_mapping() -> Dict[str, Any]:
 
 
 def test_load_schema_from_file(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Read JSON schema from file correctly."""
+    """Read and load a JSON schema from a file, ensuring correct parsing and storage."""
     with NamedTemporaryFile(delete=True, suffix=".json") as tmp:
         with open(tmp.name, "w", encoding="utf-8") as f:
             json.dump(example_json_schema, f)
@@ -155,7 +153,7 @@ def test_load_schema_from_file(json_schema_converter: Any, example_json_schema: 
 
 @mock_aws
 def test_load_schema_from_s3(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Read JSON schema from S3 without client or resource correctly."""
+    """Read and load a JSON schema from S3 using default boto3 client."""
     s3 = boto3.client("s3", region_name="eu-west-1")
     bucket_name = "test-bucket"
     key = "schema.json"
@@ -175,7 +173,7 @@ def test_load_schema_from_s3(json_schema_converter: Any, example_json_schema: An
 
 @mock_aws
 def test_load_schema_from_s3_with_resource(json_schema_converter, example_json_schema):
-    """Read JSON schema from S3 using provided session."""
+    """Read JSON schema from S3 using an explicitly provided boto3 resource."""
     session = boto3.Session(region_name="eu-west-1")
     s3_resource = session.resource("s3", region_name="eu-west-1")
     bucket_name = "session-bucket"
@@ -203,7 +201,7 @@ def test_load_schema_from_s3_with_resource(json_schema_converter, example_json_s
 
 @mock_aws
 def test_load_schema_from_s3_with_client(json_schema_converter, example_json_schema):
-    """Read JSON schema from S3 using provided client."""
+    """Read JSON schema from S3 using an explicitly provided boto3 client."""
     s3 = boto3.client("s3", region_name="eu-west-1")
     bucket_name = "client-bucket"
     key = "schema.json"
@@ -232,7 +230,7 @@ def test_load_schema_from_s3_with_client(json_schema_converter, example_json_sch
 
 @mock_aws
 def test_load_schema_from_s3_non_dict_json_raises(json_schema_converter):
-    """Raise AttributeError when S3 returns non-dict JSON."""
+    """Raise error if S3 object content is not a JSON dictionary."""
     s3 = boto3.client("s3", region_name="eu-west-1")
     bucket_name = "test-bucket"
     key = "schema.json"
@@ -255,7 +253,7 @@ def test_load_schema_from_s3_non_dict_json_raises(json_schema_converter):
 
 
 def test_load_schema_from_s3_invalid_client_or_resource(json_schema_converter):
-    """Raise ValueError when client_or_resource is not a boto3 client or resource."""
+    """Raise error when client_or_resource argument is not a valid boto3 object."""
     with pytest.raises(TypeError) as excinfo:
         json_schema_converter.load_schema_from_s3("s3://bucket/key", client_or_resource="invalid")
         assert "client_or_resource must be a boto3 client or resource." in str(excinfo.value)
@@ -263,7 +261,7 @@ def test_load_schema_from_s3_invalid_client_or_resource(json_schema_converter):
 
 @mock_aws
 def test_load_schema_from_s3_invalid_schema_path(json_schema_converter):
-    """Raise ValueError for invalid S3 URI."""
+    """Raise error for malformed or invalid S3 URI."""
     with pytest.raises(ValueError) as excinfo:
         json_schema_converter.load_schema_from_s3("any-bucket/any-key")
         assert "Invalid S3 URI: any-bucket/any-key" in str(excinfo.value)
@@ -271,7 +269,7 @@ def test_load_schema_from_s3_invalid_schema_path(json_schema_converter):
 
 @mock_aws
 def test_load_schema_from_s3_client_error_prints_and_raises(json_schema_converter, capsys):
-    """print error and re-raise clienterror when s3 get_object fails for client."""
+    """Print and re-raise ClientError when S3 get_object fails using a client."""
     s3_client = boto3.client("s3", region_name="eu-west-1")
     # monkeypatch get_object to raise ClientError
     error_response = {'Error': {'Code': 'NoSuchKey', 'Message': 'Key not found'}}
@@ -287,13 +285,13 @@ def test_load_schema_from_s3_client_error_prints_and_raises(json_schema_converte
 
 
 def test_apply_mapping(json_schema_converter: Any, example_mapping: Dict[str, Any]) -> None:
-    """Apply mapping correctly to converter mapping attribute."""
+    """Apply a mapping to the converter and verify it is set correctly."""
     json_schema_converter.apply_mapping(example_mapping)
     assert json_schema_converter.mapping == example_mapping
 
 
 def test_to_spark_schema(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Convert JSON schema to Spark StructType correctly."""
+    """Convert a JSON schema to Spark StructType and verify structure."""
     json_schema_converter.json_schema = example_json_schema
     spark_schema = json_schema_converter.to_spark_schema()
 
@@ -308,7 +306,7 @@ def test_to_spark_schema(json_schema_converter: Any, example_json_schema: Any) -
 
 
 def test_to_spark_schema_no_json_schema_raises(json_schema_converter):
-    """Raise AttributeError when no JSON schema is set for Spark conversion."""
+    """Raise error when attempting Spark schema conversion with no JSON schema."""
     converter = json_schema_converter
     # json_schema fixture initializes to empty dict
     with pytest.raises(AttributeError) as excinfo:
@@ -317,7 +315,7 @@ def test_to_spark_schema_no_json_schema_raises(json_schema_converter):
 
 
 def test_to_sql_string_no_json_schema_raises(json_schema_converter):
-    """Raise AttributeError when no JSON schema is set for SQL string."""
+    """Raise error when attempting SQL string conversion with no JSON schema."""
     converter = json_schema_converter
     with pytest.raises(AttributeError) as excinfo:
         converter.to_sql_string()
@@ -325,7 +323,7 @@ def test_to_sql_string_no_json_schema_raises(json_schema_converter):
 
 
 def test_to_spark_string(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Convert JSON schema to Spark string correctly."""
+    """Convert JSON schema to Spark schema string representation."""
     json_schema_converter.json_schema = example_json_schema
     _ = json_schema_converter.to_spark_schema()
     spark_string = json_schema_converter.to_spark_string()
@@ -342,7 +340,7 @@ def test_to_spark_string(json_schema_converter: Any, example_json_schema: Any) -
 
 
 def test_to_sql_string(json_schema_converter: Any, example_json_schema: Any, example_full_json_schema: Any) -> None:
-    """Convert JSON schema to SQL string correctly."""
+    """Convert JSON schema to SQL string, including different data types."""
     json_schema_converter.json_schema = example_json_schema
     sql_string = json_schema_converter.to_sql_string()
 
@@ -365,7 +363,7 @@ def test_to_sql_string(json_schema_converter: Any, example_json_schema: Any, exa
 
 
 def test_to_dtypes(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Convert JSON schema to dictionary of dtypes correctly."""
+    """Convert JSON schema to a dictionary mapping keys to SQL dtypes."""
     json_schema_converter.json_schema = example_json_schema
     dtypes = json_schema_converter.to_dtypes()
 
@@ -379,7 +377,7 @@ def test_to_dtypes(json_schema_converter: Any, example_json_schema: Any) -> None
 
 
 def test_to_dtypes_no_json_schema_raises(json_schema_converter):
-    """Raise AttributeError when no JSON schema is set for dtypes."""
+    """Raise error when attempting to convert to dtypes with no JSON schema."""
     converter = json_schema_converter
     with pytest.raises(AttributeError) as excinfo:
         converter.to_dtypes()
@@ -387,7 +385,7 @@ def test_to_dtypes_no_json_schema_raises(json_schema_converter):
 
 
 def test_to_dtypes_non_string_val_raises(json_schema_converter, monkeypatch):
-    """Raise AttributeError if _to_sql_string returns non-string in dtypes."""
+    """Raise error if _to_sql_string returns a non-string value in dtypes conversion."""
     json_schema_converter.json_schema = {"properties": {"x": {"type": "string"}}}
     monkeypatch.setattr(json_schema_converter, '_to_sql_string', lambda data, to_lower=False: 123)
     with pytest.raises(AttributeError) as excinfo:
@@ -396,7 +394,7 @@ def test_to_dtypes_non_string_val_raises(json_schema_converter, monkeypatch):
 
 
 def test_to_dtypes_lowercase_keys(json_schema_converter):
-    """Lowercase keys in dtypes output when to_lower is True."""
+    """Ensure keys are lowercased in dtypes output when to_lower is True."""
     json_schema_converter.json_schema = {
         "properties": {
             "KeyOne": {"type": "string"},
@@ -408,80 +406,8 @@ def test_to_dtypes_lowercase_keys(json_schema_converter):
     assert "keytwo" in result and result["keytwo"] == "int"
 
 
-def test_decimal_encoder() -> None:
-    """Encode and decode Decimal and float values using DecimalEncoder."""
-    data: Dict[str, Any] = {
-        "decimal_value": Decimal("12.34"),
-        "integer_value": Decimal("12"),
-        "float_value": 12.34
-    }
-
-    encoded = json.dumps(data, cls=DecimalEncoder)
-    decoded = json.loads(encoded)
-
-    assert decoded["decimal_value"] == 12.34
-    assert decoded["integer_value"] == 12
-    assert decoded["float_value"] == 12.34
-
-
-def test_flatten_schema_basic() -> None:
-    """Flatten schema with nested properties using default separator."""
-    schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "example-schema",
-        "properties": {
-            "uid": {"type": "string"},
-            "details": {
-                "type": "object",
-                "properties": {
-                    "nested1": {"type": "number"},
-                    "nested2": {"type": "string"}
-                }
-            }
-        }
-    }
-    expected_output = {
-        "uid": "string",
-        "details.nested1": "number",
-        "details.nested2": "string"
-    }
-    assert JsonSchemaConverter._flatten_schema(schema) == expected_output
-
-
-def test_flatten_schema_with_different_separator() -> None:
-    """Flatten schema using a different separator."""
-    schema = {
-        "properties": {
-            "uid": {"type": "string"},
-            "details": {
-                "type": "object",
-                "properties": {
-                    "nested1": {"type": "number"},
-                    "nested2": {"type": "string"}
-                }
-            }
-        }
-    }
-    expected_output = {
-        "uid": "string",
-        "details/nested1": "number",
-        "details/nested2": "string"
-    }
-    assert JsonSchemaConverter._flatten_schema(schema, sep="/") == expected_output
-
-
-def test_flatten_schema_with_no_properties() -> None:
-    """Return empty dict when flattening schema with no properties."""
-    schema = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "example-schema"
-    }
-    expected_output: dict[str, Any] = {}
-    assert JsonSchemaConverter._flatten_schema(schema) == expected_output
-
-
 def test_to_flat(json_schema_converter: JsonSchemaConverter) -> None:
-    """Convert JSON schema to flat dictionary using default separator."""
+    """Flatten a JSON schema into a flat dictionary using the default separator."""
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "example-schema",
@@ -506,7 +432,7 @@ def test_to_flat(json_schema_converter: JsonSchemaConverter) -> None:
 
 
 def test_to_flat_with_different_separator(json_schema_converter: JsonSchemaConverter) -> None:
-    """Convert JSON schema to flat dictionary with custom separator."""
+    """Flatten a JSON schema into a flat dictionary using a custom separator."""
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "example-schema",
@@ -531,7 +457,7 @@ def test_to_flat_with_different_separator(json_schema_converter: JsonSchemaConve
 
 
 def test_to_spark_string_initializes_schema(json_schema_converter: Any, example_json_schema: Any) -> None:
-    """Initialize Spark schema and return Spark string when Spark schema is None."""
+    """Initialize Spark schema if not set and return Spark schema string."""
     # Ensure spark_schema is initially None
     assert json_schema_converter.spark_schema is None
 
@@ -555,7 +481,7 @@ def test_to_spark_string_initializes_schema(json_schema_converter: Any, example_
 
 
 def test_to_spark_schema_object_type(json_schema_converter):
-    """Convert JSON schema with object root type to Spark StructType."""
+    """Convert a JSON schema with root type 'object' to Spark StructType."""
     json_schema_converter.json_schema = {
         "type": "object",
         "properties": {
@@ -592,7 +518,7 @@ def test_to_spark_schema_object_type(json_schema_converter):
     ],
 )
 def test_to_spark_schema_varieties(json_schema_converter, schema, expected_class, check):
-    """Convert array, decimal, and map types in JSON schema to Spark types."""
+    """Convert array, decimal, and map root types in JSON schema to Spark types."""
     json_schema_converter.json_schema = schema
     result = json_schema_converter.to_spark_schema()
     assert isinstance(result, expected_class)
@@ -600,7 +526,7 @@ def test_to_spark_schema_varieties(json_schema_converter, schema, expected_class
 
 
 def test_to_spark_schema_with_mapping_root(json_schema_converter):
-    """Apply mapping and convert root properties to Spark schema."""
+    """Apply mapping at the root and convert mapped properties to Spark StructType."""
     json_schema_converter.json_schema = {
         "properties": {
             "a": {"type": "string"},
@@ -621,7 +547,7 @@ def test_to_spark_schema_with_mapping_root(json_schema_converter):
 
 
 def test_to_spark_schema_unknown_type_raises(json_schema_converter):
-    """Raise AttributeError for unknown data type in Spark schema."""
+    """Raise error for unknown or unsupported data type in Spark schema conversion."""
     json_schema_converter.json_schema = {"type": "unknown"}
     with pytest.raises(AttributeError) as excinfo:
         json_schema_converter.to_spark_schema()
@@ -654,7 +580,7 @@ def test_to_spark_string_varieties(json_schema_converter, schema, expected):
 
 
 def test_to_spark_string_unknown_datatype_raises(json_schema_converter):
-    """Raise AttributeError for unknown datatype in spark string."""
+    """Raise error for unknown Spark data type in Spark string conversion."""
     with pytest.raises(AttributeError) as excinfo:
         # BinaryType is not handled explicitly in _to_spark_string
         json_schema_converter._to_spark_string(BinaryType())
@@ -662,7 +588,7 @@ def test_to_spark_string_unknown_datatype_raises(json_schema_converter):
 
 
 def test_to_sql_string_null_type_raises(json_schema_converter):
-    """Raise ValueError for null type in SQL string."""
+    """Raise error for unsupported 'null' type in SQL string conversion."""
     json_schema_converter.json_schema = {"properties": {"x": {"type": "null"}}}
     with pytest.raises(ValueError) as excinfo:
         json_schema_converter.to_sql_string()
@@ -670,7 +596,7 @@ def test_to_sql_string_null_type_raises(json_schema_converter):
 
 
 def test_to_sql_string_nested_object(json_schema_converter):
-    """Convert nested object in JSON schema to SQL string."""
+    """Convert a nested object in JSON schema to a valid SQL string."""
     json_schema_converter.json_schema = {
         "properties": {
             "outer": {
@@ -686,7 +612,7 @@ def test_to_sql_string_nested_object(json_schema_converter):
 
 
 def test_to_sql_string_with_mapping(json_schema_converter):
-    """Apply mapping and convert to SQL string correctly."""
+    """Apply mapping and convert JSON schema to SQL string with mapped fields."""
     json_schema_converter.json_schema = {"properties": {"cnt": {"type": "integer"}}}
     json_schema_converter.apply_mapping({"cnt": {"count": {"type": "long"}}})
     sql_string = json_schema_converter.to_sql_string()
@@ -694,14 +620,14 @@ def test_to_sql_string_with_mapping(json_schema_converter):
 
 
 def test_to_sql_string_unknown_data_type_raises(json_schema_converter):
-    """Raise AttributeError for unknown data type in SQL conversion."""
+    """Raise error for unknown data type during SQL string conversion."""
     with pytest.raises(AttributeError) as excinfo:
         json_schema_converter._to_sql_string({"type": "foo"}, False)
     assert "Unknown data type 'foo'." in str(excinfo.value)
 
 
 def test_to_sql_string_non_string_output_raises(json_schema_converter, monkeypatch):
-    """Raise ValueError if _to_sql_string returns non-string in SQL string."""
+    """Raise error if _to_sql_string returns non-string during SQL string conversion."""
     json_schema_converter.json_schema = {"properties": {"x": {"type": "string"}}}
     # monkeypatch _to_sql_string to return a non-string type
     monkeypatch.setattr(json_schema_converter, '_to_sql_string', lambda data, to_lower=False: 123)
@@ -728,3 +654,54 @@ def test_to_sql_string_array_and_map_varieties(json_schema_converter, schema, ex
     json_schema_converter.json_schema = schema
     result = json_schema_converter.to_sql_string()
     assert result == expected
+
+
+def test_converter_to_iceberg_schema():
+    """Convert JSON schema with nested objects to a valid Iceberg schema."""
+    from schemaworks.converter import JsonSchemaConverter
+    from pyiceberg.schema import Schema as IcebergSchema, StructType as IcebergStructType
+    converter = JsonSchemaConverter({
+        "properties": {
+            "uid": {"type": "string"},
+            "details": {
+                "type": "object",
+                "properties": {
+                    "score": {"type": "number"},
+                    "active": {"type": "boolean"}
+                },
+                "required": ["score"]
+            }
+        },
+        "required": ["uid"]
+    })
+    schema = converter.to_iceberg_schema()
+    assert isinstance(schema, IcebergSchema)
+    field_names = [f.name for f in schema.fields]
+    assert "uid" in field_names
+    assert "details" in field_names
+    details_field = next(f for f in schema.fields if f.name == "details")
+    assert isinstance(details_field.field_type, IcebergStructType)
+    nested_names = [f.name for f in details_field.field_type.fields]
+    assert "score" in nested_names
+    assert "active" in nested_names
+
+
+def test_to_iceberg_schema_no_json_schema(caplog):
+    """Log and raise error when attempting to convert without a JSON schema."""
+    from schemaworks.converter import JsonSchemaConverter
+    converter = JsonSchemaConverter()
+    with caplog.at_level("ERROR"):
+        with pytest.raises(AttributeError, match="No JSON schema available"):
+            converter.to_iceberg_schema()
+        assert any("No JSON schema available" in message for message in caplog.messages)
+
+
+def test_to_iceberg_schema_missing_properties(caplog):
+    """Log and raise error when JSON schema lacks a 'properties' section."""
+    import pytest
+    from schemaworks.converter import JsonSchemaConverter
+    converter = JsonSchemaConverter({"title": "test-schema"})
+    with caplog.at_level("ERROR"):
+        with pytest.raises(ValueError, match="No properties found in the JSON schema."):
+            converter.to_iceberg_schema()
+        assert any("No properties found in the JSON schema." in message for message in caplog.messages)

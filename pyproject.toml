@@ -1,6 +1,6 @@
 [project]
 name = "schemaworks"
-version = "1.1.0"
+version = "1.2.0"
 description = "A schema conversion toolkit for JSON, Spark, and SQL formats."
 authors = [
     {name = "Anatol Jurenkow", email = "azurius@t-online.de"}
@@ -12,7 +12,8 @@ dependencies = [
     "boto3 (>=1.38.32,<2.0.0)",
     "jsonschema",
     "numpy",
-    "pyspark"
+    "pyspark",
+    "pyiceberg (>=0.9.1,<0.10.0)"
 ]
 keywords = ["schema", "conversion", "spark", "json", "sql", "data-engineering"]
 classifiers = [

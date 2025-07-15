@@ -7,6 +7,7 @@ import boto3
 import botocore
 from boto3.resources.base import ServiceResource
 from botocore.client import BaseClient
+from pyiceberg.schema import Schema as IcebergSchema
 from pyspark.sql.types import (
     ArrayType,
     BooleanType,
@@ -24,7 +25,7 @@ from pyspark.sql.types import (
     TimestampNTZType
 )
 
-from schemaworks.utils import ATHENA_TYPE_MAP, SPARK_TYPE_MAP
+from schemaworks.utils import ATHENA_TYPE_MAP, SPARK_TYPE_MAP, IcebergIDAllocator
 
 LOGGER = logging.getLogger(__name__)
 
@@ -360,8 +361,9 @@ class JsonSchemaConverter():
             DataType: A PySpark DataType object as the schema.
         """
         if not self.json_schema:
-            LOGGER.error("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
-            raise AttributeError("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
+            log_message = "No JSON schema available. Use 'read_json' or set the 'json_schema' attribute."
+            LOGGER.error(log_message)
+            raise AttributeError(log_message)
         self.spark_schema = self._to_spark_schema(self.json_schema, to_lower)
         return self.spark_schema
 
@@ -404,8 +406,9 @@ class JsonSchemaConverter():
             str: The string representation of the schema as used by SQL DDL.
         """
         if not self.json_schema:
-            LOGGER.error("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
-            raise AttributeError("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
+            log_message = "No JSON schema available. Use 'read_json' or set the 'json_schema' attribute."
+            LOGGER.error(log_message)
+            raise AttributeError(log_message)
 
         schema_str = self._to_sql_string(self.json_schema, to_lower)
         if isinstance(schema_str, str):
@@ -454,8 +457,9 @@ class JsonSchemaConverter():
             dict[str, str]: A dictionary with column names as keys and SQL schemas as their values.
         """
         if not self.json_schema:
-            LOGGER.error("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
-            raise AttributeError("No JSON schema available. Use 'read_json' or set the 'json_schema' attribute.")
+            log_message = "No JSON schema available. Use 'read_json' or set the 'json_schema' attribute."
+            LOGGER.error(log_message)
+            raise AttributeError(log_message)
 
         result: dict[str, str] = {}
         for key, value in self.json_schema["properties"].items():
@@ -466,52 +470,6 @@ class JsonSchemaConverter():
                 LOGGER.error("'_to_sql_string' returned a non-string value: %s", type(val))
                 raise AttributeError("'_to_sql_string' returned a non-string value.")
         return result
-
-    @staticmethod
-    def _flatten_schema(schema: dict[str, Any], parent_key: str = "", sep: str = ".") -> dict[str, Any]:
-        """
-        Flattens the provided JSON schema.
-        - Removes keywords like `type` and `properties`.
-        - Handles nested fields by separating them by `.`.
-
-        Args:
-            schema (dict[str, Any]): A dictionary in JSON schema format.
-            parent_key (str, optional): Used in recursion. Defaults to "".
-            sep (str, optional): Separator to use when unnesting fields. Defaults to ".".
-
-        Returns:
-            dict[str, Any]: A flattened dictionary.
-
-        Example:
-            ```json
-            {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "title": "example-schema",
-                "properties": {
-                    "uid": {"type": "string"},
-                    "details": {
-                        "type": "object",
-                        "properties": {
-                            "nested1": {"type": "number"},
-                            "nested2": {"type": "string"}
-                        }
-                    }
-                }
-            }
-            ```
-            resolves to
-            ```python
-            {"uid": "string", "details.nested1": "float", "details.nested2": "string"}
-            ```
-        """
-        items = {}
-        for k, v in schema.get("properties", {}).items():
-            new_key = f"{parent_key}{sep}{k}" if parent_key else k
-            if v.get("type") == "object":
-                items.update(JsonSchemaConverter._flatten_schema(v, new_key, sep=sep))
-            else:
-                items[new_key] = v["type"]
-        return items
 
     def to_flat(self, sep: str = ".") -> dict[str, str]:
         """
@@ -547,4 +505,32 @@ class JsonSchemaConverter():
             {"uid": "string", "details.nested1": "float", "details.nested2": "string"}
             ```
         """
-        return JsonSchemaConverter._flatten_schema(self.json_schema, sep=sep)
+        from schemaworks.utils import flatten_schema
+        return flatten_schema(self.json_schema, sep=sep)
+
+    def to_iceberg_schema(self, id_start: int = 1000) -> IcebergSchema:
+        """
+        Converts the JSON schema to an Iceberg schema by parsing the existing JSON.
+
+        Args:
+            id_start (int): The starting ID for the Iceberg schema fields. Defaults to
+                1000, which is a common starting point for Iceberg schemas.
+        """
+        if not self.json_schema:
+            log_message = "No JSON schema available. Use 'read_json' or set the 'json_schema' attribute."
+            LOGGER.error(log_message)
+            raise AttributeError(log_message)
+
+        from schemaworks.utils import build_iceberg_struct_type
+
+        allocator = IcebergIDAllocator(id_start)
+        required_fields = self.json_schema.get("required", [])
+        properties = self.json_schema.get("properties", {})
+
+        if not properties:
+            log_message = "No properties found in the JSON schema."
+            LOGGER.error(log_message)
+            raise ValueError(log_message)
+
+        struct_type = build_iceberg_struct_type(properties, allocator, required_fields)
+        return IcebergSchema(*struct_type.fields)
