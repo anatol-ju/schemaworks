@@ -227,7 +227,7 @@ def test_parse_primitive_field():
     assert isinstance(field, IcebergNestedField)
     assert field.name == "age"
     assert isinstance(field.field_type, IcebergIntegerType)
-    assert field.field_id == 1  # ID is assigned after allocation
+    assert field.field_id == 1  # ID is assigned during allocation
 
 
 def test_iceberg_id_allocator_peek():
