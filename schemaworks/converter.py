@@ -508,13 +508,13 @@ class JsonSchemaConverter():
         from schemaworks.utils import flatten_schema
         return flatten_schema(self.json_schema, sep=sep)
 
-    def to_iceberg_schema(self, id_start: int = 1000) -> IcebergSchema:
+    def to_iceberg_schema(self, id_start: int = 1) -> IcebergSchema:
         """
         Converts the JSON schema to an Iceberg schema by parsing the existing JSON.
 
         Args:
             id_start (int): The starting ID for the Iceberg schema fields. Defaults to
-                1000, which is a common starting point for Iceberg schemas.
+                1, which is a common starting point for Iceberg schemas.
         """
         if not self.json_schema:
             log_message = "No JSON schema available. Use 'read_json' or set the 'json_schema' attribute."
